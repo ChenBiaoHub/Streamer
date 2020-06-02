@@ -1,0 +1,153 @@
+// Copyright (c) 2017-2018 Xiamen Yaji Software Co., Ltd.  
+
+// Note: Current format version is experiment, the format may be changed.
+// The future format may not be compatible, you may need to update the script manually.
+
+// 注意：当前版本的格式是实验性的，之后还会进行修改。
+// 后续版本的格式不保证兼容当前格式，可能需要手动升级到最新版本。，
+%{
+  techniques: [
+    {
+      passes: [
+        {
+          vert: vs
+          frag: fs
+          cullMode: none
+          blend: true
+        }
+      ]
+      layer: 0
+    }
+  ]
+  properties: {
+    texture: {
+      type: sampler2D
+      value: null
+    }
+    alphaThreshold: {
+      type: number
+      value: 0.5
+    }
+    //范围  0 - (1 + n) n 和斜率有关
+    start_x: {
+      type: float
+      value: 0.0
+    }
+    tan_value: {
+      type: float
+      value: 5.0
+    }
+    light_width: {
+      type: float
+      value: 0.2
+    }    
+    light_strength: {
+      type: float
+      value: 0.003
+    }
+    
+  }
+%}
+
+%% vs {
+
+precision highp float;
+
+uniform mat4 cc_matViewProj;
+
+#if _USE_MODEL
+  uniform mat4 cc_matWorld;
+#endif
+
+attribute vec3 a_position;
+attribute lowp vec4 a_color;
+
+#if USE_TEXTURE
+  attribute mediump vec2 a_uv0;
+  varying mediump vec2 v_uv0;
+#endif
+
+varying lowp vec4 v_color;
+
+void main () {
+  mat4 mvp;
+  
+  #if _USE_MODEL
+    mvp = cc_matViewProj * cc_matWorld;
+  #else
+    mvp = cc_matViewProj;
+  #endif
+
+  #if USE_TEXTURE
+    v_uv0 = a_uv0;
+  #endif
+
+  v_color = a_color;
+
+  gl_Position = mvp * vec4(a_position, 1);
+}
+
+}
+
+%% fs {
+
+precision highp float;
+
+#if USE_TEXTURE
+  uniform sampler2D texture;
+  varying mediump vec2 v_uv0;
+  uniform float start_x;
+  uniform float tan_value;
+  uniform float light_width;
+  uniform float light_strength;
+#endif
+
+#include <alpha-test>
+
+varying lowp vec4 v_color;
+
+void main () {
+  vec4 color = v_color;
+
+  #if USE_TEXTURE
+    color *= texture2D(texture, v_uv0);
+    #if _USE_ETC1_TEXTURE
+      color.a *= texture2D(texture, v_uv0 + vec2(0, 0.5)).r;
+    #endif
+    float y1 = -1.0 * tan_value * (v_uv0.x - start_x);
+    float y2 = -1.0 * tan_value * (v_uv0.x - start_x - light_width);
+
+
+
+    if (v_uv0.y > y1 && v_uv0.y < y2) {
+      //计算现在的点到中心线的距离
+      float dis = v_uv0.y * -1.0 / tan_value + (light_width / 2.0) + start_x - v_uv0.x;
+      if (dis < 0.0) {
+        dis = dis * -1.0;
+      }
+
+      //距离所占比例
+      // * 1.0 后变为透明度  所以本身就是透明度
+      float sc = dis / (light_width / 2.0);
+  
+      //计算光的透明度  营造光晕效果
+      // 中间不透明   两边透明
+      //用 sin 来达成先快后慢的变化效果
+
+      float lightA = (1.0 - sin(sc * 3.1415926536 / 2.0)) * light_strength;
+
+      float newr = color.r * (1.0 - lightA) + 255.0 * lightA;
+      float newg = color.g * (1.0 - lightA) + 255.0 * lightA;
+      float newb = color.b * (1.0 - lightA) + 255.0 * lightA;      
+      float newa = color.a * (1.0 - lightA) + 1.0 * lightA;
+
+
+      color = vec4(newr, newg, newb, newa);
+    }
+  #endif
+
+
+  gl_FragColor = color;
+}
+
+}
