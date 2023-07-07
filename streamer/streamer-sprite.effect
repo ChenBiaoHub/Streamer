@@ -1,0 +1,199 @@
+// Copyright (c) 2017-2020 Xiamen Yaji Software Co., Ltd.
+CCEffect %{
+  techniques:
+  - passes:
+    - vert: sprite-vs:vert
+      frag: sprite-fs:frag
+      depthStencilState:
+        depthTest: false
+        depthWrite: false
+      blendState:
+        targets:
+        - blend: true
+          blendSrc: src_alpha
+          blendDst: one_minus_src_alpha
+          blendDstAlpha: one_minus_src_alpha
+      rasterizerState:
+        cullMode: none
+      properties:
+        alphaThreshold: { value: 0.5 }
+        # 光线颜色
+        lightColor: {
+          value: [255.0, 255.0, 255.0, 0.5], 
+          editor: {
+            type: color,
+            tooltip: "光线颜色"
+          } 
+        }
+        # 光线中心点位置
+        lightCenterPoint: {
+          value: [0.5, 0.5],
+          editor: {
+            tooltip: "光线中心点位置" 
+          }
+        }
+        # 光线倾斜角度 水平是0
+        lightAngle: {
+          value: 85,
+          editor: {
+            tooltip: "光线倾斜角度",
+            step: 0.1,
+            slide: true,
+            range: [0.0, 180.0],
+          } 
+        }
+        # 光线宽度
+        lightWidth: {
+          value: 0.25,
+          editor: {
+            tooltip: "光线宽度",
+            slide: true,
+            step: 0.01,
+            range: [0.0, 1.0],
+          }
+        }
+        # 光线移动速度
+        lightSpeed: {
+          value: 1.0,
+          editor: {
+            tooltip: "光线移动速度",
+            parent: LIGHT_AUTO,
+            step: 0.01,
+            slide: true,
+            range: [0.0, 10.0]
+          }
+        }
+}%
+
+
+
+CCProgram sprite-vs %{
+  precision highp float;
+  #include <cc-global>
+  #if USE_LOCAL
+    #include <cc-local>
+  #endif
+  #if SAMPLE_FROM_RT
+    #include <common>
+  #endif
+  in vec3 a_position;
+  in vec2 a_texCoord;
+  in vec4 a_color;
+
+  out vec4 color;
+  out vec2 uv0;
+
+  vec4 vert () {
+    vec4 pos = vec4(a_position, 1);
+
+    #if USE_LOCAL
+      pos = cc_matWorld * pos;
+    #endif
+
+    #if USE_PIXEL_ALIGNMENT
+      pos = cc_matView * pos;
+      pos.xyz = floor(pos.xyz);
+      pos = cc_matProj * pos;
+    #else
+      pos = cc_matViewProj * pos;
+    #endif
+
+    uv0 = a_texCoord;
+    #if SAMPLE_FROM_RT
+      CC_HANDLE_RT_SAMPLE_FLIP(uv0);
+    #endif
+    color = a_color;
+
+    return pos;
+  }
+}%
+
+CCProgram sprite-fs %{
+  precision highp float;
+  #include <embedded-alpha>
+  #include <alpha-test>
+
+  in vec4 color;
+
+  #if USE_LIGHT
+    uniform LightUniform {
+      // 光线颜色
+      vec4 lightColor;
+      //光中心坐标
+      vec2 lightCenterPoint;
+      // 光线倾斜角度
+      float lightAngle; 
+      // 光线宽度
+      float lightWidth;
+    };
+    #if USE_FOG
+    #endif
+  #endif
+
+  #if LIGHT_AUTO
+    uniform LightAutoUniform {
+        // 光线移动速度
+        float lightSpeed;
+    };
+    #include <cc-global.chunk>
+  #endif
+
+  #if USE_TEXTURE
+    in vec2 uv0;
+    #pragma builtin(local)
+    layout(set = 2, binding = 11) uniform sampler2D cc_spriteTexture;
+  #endif
+
+
+  vec4 frag () {
+    vec4 o = vec4(1.0, 1.0, 1.0, 1.0);
+    #if USE_TEXTURE
+      o *= CCSampleWithAlphaSeparated(cc_spriteTexture, uv0);
+      #if IS_GRAY
+        float gray  = 0.2126 * o.r + 0.7152 * o.g + 0.0722 * o.b;
+        o.r = o.g = o.b = gray;
+      #endif
+
+      #if USE_LIGHT
+        float centerX = lightCenterPoint.x;
+        #if LIGHT_AUTO
+          centerX = mod(cc_time.x * lightSpeed, 1.2);
+        #endif
+
+        //获取弧度角用于三角计算
+        float radiansAngle = radians(180.0 - lightAngle);
+
+        //计算中心点水平边缘
+        float offsetX = sin(radiansAngle) * lightWidth / 2.0;
+        //计算在y位置处的x中心
+        float relCenterX = (uv0.y - lightCenterPoint.y) / tan(radiansAngle) + centerX;
+        float relMaxX = relCenterX + offsetX;
+        float relMinX = relCenterX - offsetX;
+          float dis = distance(uv0, vec2(relCenterX, uv0.y));
+        if(uv0.x > relMinX && uv0.x < relMaxX) {
+          #if USE_FOG
+            float black = smoothstep(0.85, 1.0, 1.0 - dis);
+            o.a *= black;
+          #else
+            float sc = dis / (lightWidth / 2.0);
+          //使用三角函数来模拟光线中间衰弱时先慢后快的效果
+            float lightA = (1.0 - sin(sc * 3.1415926536 / 2.0)) * 0.005 * lightColor.a;
+            o.r = o.r * (1.0 - lightA) + lightColor.r * 255.0 * lightA;
+            o.g = o.g * (1.0 - lightA) + lightColor.g * 255.0 * lightA;
+            o.b = o.b * (1.0 - lightA) + lightColor.b * 255.0 * lightA;
+            o.a = o.a * (1.0 - lightA) + lightA;
+          #endif
+        } else {
+          #if USE_FOG
+            float black = smoothstep(0.85, 1.0, 1.0 - dis);
+            o.a *= black;
+          #endif
+        }
+      #endif
+    #endif
+
+    o *= color;
+    ALPHA_TEST(o);
+    return o;
+  }
+}%
